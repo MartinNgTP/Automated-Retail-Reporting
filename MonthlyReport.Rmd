@@ -1,0 +1,593 @@
+---
+title: "Retail Transactions:  Monthly Report"
+author: "Martin Ng"
+output: html_document
+params:
+  views_file: NULL
+  transactions_file: NULL
+  products_file: NULL
+  customers_file: NULL
+  month: NULL
+  year: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r seed}
+set.seed(41)
+```
+
+```{r libraries}
+library(data.table)
+library(DT)
+```
+
+```{r constants}
+
+```
+
+```{r functions}
+### Q1
+# Function to get the top 10 most viewed products for the first 7 days of any given month
+get_top_10_views <- function(views_data, products_data, year, month) {
+  
+  # Step 1: Construct the date range for the first 7 days of the specified month and year
+  start_date <- as.POSIXct(paste0(year, "-", sprintf("%02d", month), "-01 00:00:00"))
+  end_date <- as.POSIXct(paste0(year, "-", sprintf("%02d", month), "-08 00:00:00"))
+  
+  # Step 2: Filter the views data for the first 7 days of the specified month and year
+  views_first7days <- views_data[time >= start_date & time < end_date]
+  
+  # Step 3: Count the number of views per product_id
+  view_counts <- views_first7days[, .(view_count = .N), by = product_id]
+  
+  # Step 4: Join with products data to include category
+  top_10_views <- merge(view_counts, products_data, by = "product_id", all.x = TRUE)
+  
+  # Step 5: Reorder the columns to product_id, category, and view_count
+  top_10_views <- top_10_views[, .(product_id, category, view_count)]
+  
+  # Step 6: Sort by view count and get the top 10 most viewed products
+  top_10_views <- top_10_views[order(-view_count)][1:10]
+  
+  # Return the top 10 most viewed products
+  return(top_10_views)
+}
+
+### Q2
+# Function to get the top 10 most viewed products for each category
+get_top_10_by_category <- function(views_data, products_data) {
+
+  # Step 1: Count the number of views per product_id
+  view_counts <- views_data[, .(view_count = .N), by = product_id]
+  
+  # Step 2: Join with products data to include category
+  view_counts_with_category <- merge(view_counts, products_data, by = "product_id", all.x = TRUE)
+  
+  # Step 3: For each category, find the top 10 products
+  categories <- unique(view_counts_with_category$category)
+  results <- list()
+  
+  for (cat in categories) {
+    top_10 <- view_counts_with_category[category == cat][order(-view_count)][1:10, .(product_id, view_count)]
+    results[[cat]] <- top_10
+  }
+  return(results)
+}
+
+### Q3
+# Function to calculate revenue by category
+calculate_revenue_by_category <- function(transactions_data, products_data) {
+  # Step 1: Select only the category and product_id from products
+  products_reduced <- products_data[, .(product_id, category)]
+  
+  # Step 2: Merge only the category column into transactions_month
+  transactions_with_category <- merge(transactions_data, products_reduced, by = "product_id", all.x = TRUE)
+  
+  # Step 3: Calculate the total revenue per transaction (price * quantity)
+  transactions_with_category[, revenue := price * quantity]
+  
+  # Step 4: Aggregate total revenue by category
+  revenue_by_category <- transactions_with_category[, .(total_revenue = round(sum(revenue, na.rm = TRUE), 2)), by = category]
+  
+  # Step 5: Sort by total revenue in decreasing order
+  revenue_by_category <- revenue_by_category[order(-total_revenue)]
+  
+  return(revenue_by_category)
+}
+
+### Q4
+# Function to calculate customers spending
+calculate_spending_statistics <- function(transactions_data) {
+  
+  # Step 1: Filter customers with at least one transaction
+  customers_with_transactions <- transactions_data[, .(total_spending = sum(price * quantity)), by = customer_id]
+  
+  # Step 2: Calculate summary statistics for monthly spending per customer
+  average_spending <- mean(customers_with_transactions$total_spending)
+  median_spending <- median(customers_with_transactions$total_spending)
+  sd_spending <- sd(customers_with_transactions$total_spending)
+  
+  # Step 3: Return the results as a list
+  results <- list(
+    average_spending = round(average_spending, 2),
+    median_spending = round(median_spending, 2),
+    sd_spending = round(sd_spending, 2)
+  )
+  
+  return(results)
+}
+
+### Q5
+# Function to calculate revenue by gender
+calculate_revenue_by_gender <- function(transactions_data, customers_data) {
+  
+  # Step 1: Merge transactions with customer data to get gender
+  transactions_with_customers <- merge(transactions_data, customers_data[, .(customer_id, gender)], by = "customer_id", all.x = TRUE)
+  
+  # Step 2: Calculate the total revenue per transaction (price * quantity)
+  transactions_with_customers[, revenue := price * quantity]
+  
+  # Step 3: Calculate total revenue by gender
+  revenue_by_gender <- transactions_with_customers[, .(total_revenue = sum(revenue, na.rm = TRUE)), by = gender]
+  
+  # Step 4: Calculate total monthly revenue
+  total_revenue <- sum(revenue_by_gender$total_revenue, na.rm = TRUE)
+  
+  # Step 5: Calculate percentage of total revenue for each gender
+  revenue_by_gender$percentage <- round((revenue_by_gender$total_revenue/total_revenue)*100,2)
+  
+  revenue_by_gender$total_revenue <- round(revenue_by_gender$total_revenue,2)
+  
+  # Step 6: Return the revenue and percentage for each gender
+  return(revenue_by_gender)
+}
+
+### Q6
+# Function to calculate monthly spending per customer
+calculate_monthly_spending_per_customer <- function(transactions_data, customers_data) {
+  
+  # Calculate total spending per customer (sum of price * quantity)
+  transactions_data[, spending := price * quantity]
+  monthly_spending <- transactions_data[, .(total_spending = sum(spending, na.rm = TRUE)), by = customer_id]
+  
+  # Merge with customers data to include demographic information (income, age, gender, region)
+  customer_spending_data <- merge(monthly_spending, customers_data, by = "customer_id", all.x = TRUE)
+  
+  return(customer_spending_data)
+}
+
+# Function to fit a linear regression model
+fit_spending_regression <- function(customer_spending_data) {
+  # Scale income by 10,000 for easier interpretation
+  customer_spending_data[, scaled_income := income / 10000]
+  
+  # Fit the linear regression model
+  model <- lm(total_spending ~ scaled_income + age + gender + region, data = customer_spending_data)
+  
+  # Return the model summary
+  return(summary(model))
+}
+
+### Q7
+# Function to calculate total views, total purchases, and percentage of viewers who purchased
+calculate_views_and_purchases <- function(views_data, transactions_data) {
+  
+  # Step 1: Identify customers with at least one view
+  customers_with_views <- unique(views_data$customer_id)
+  
+  # Step 2: Identify customers with at least one purchase
+  customers_with_purchases <- unique(transactions_data$customer_id)
+  
+  # Step 3: Calculate the number of customers who viewed at least 1 product
+  total_customers_with_views <- length(customers_with_views)
+  
+  # Step 4: Identify customers who viewed a product and made a purchase
+  customers_with_both <- intersect(customers_with_views, customers_with_purchases)
+  total_customers_with_both <- length(customers_with_both)
+  
+  # Step 5: Calculate the percentage of customers who made a purchase among those with a view
+  percentage_with_purchase <- round((total_customers_with_both / total_customers_with_views) * 100, 2)
+  
+  # Step 6: Return the results as a list
+  result <- list(
+    total_customers_with_views = total_customers_with_views,
+    total_customers_with_purchases = total_customers_with_both,
+    percentage_with_purchase = percentage_with_purchase
+  )
+  
+  return(result)
+}
+
+### Q8
+# Function to calculate viewing habits by age group
+calculate_viewing_stats_by_age_group <- function(views_data, customers_data) {
+  
+  # Step 1: Create age group categories
+  create_age_group <- function(age) {
+    if (age >= 18 & age <= 34) {
+      return("18-34")
+    } else if (age >= 35 & age <= 49) {
+      return("35-49")
+    } else if (age >= 50 & age <= 64) {
+      return("50-64")
+    } else {
+      return("65+")
+    }
+  }
+  
+  # Step 2: Merge views data with customers data to include age
+  views_with_age <- merge(views_data, customers_data[, .(customer_id, age)], by = "customer_id", all.x = TRUE)
+  
+  # Step 3: Add age group column
+  views_with_age[, age_group := sapply(age, create_age_group)]
+  
+  # Step 4: Calculate the number of unique products viewed per customer
+  unique_products_per_customer <- views_with_age[, .(unique_products = uniqueN(product_id)), by = .(customer_id, age_group)]
+  
+  # Step 5: Calculate mean, median, and standard deviation for unique products viewed in each age group
+  summary_stats <- unique_products_per_customer[, .(
+    mean_unique_products = round(mean(unique_products),2),
+    median_unique_products = round(median(unique_products),2),
+    sd_unique_products = round(sd(unique_products),2)
+  ), by = age_group][order(age_group)]
+  
+  # Step 6: Return the summary statistics
+  return(summary_stats)
+}
+
+### Q9
+# Function to calculate the increase in monthly average spending associated with an extra 10 product views
+calculate_spending_increase_per_views <- function(views_data, transactions_data, customers_data) {
+  
+  # Step 1: Filter customers with at least 1 view
+  customers_with_views <- unique(views_data$customer_id)
+  
+  # Step 2: Calculate total views per customer
+  total_views_per_customer <- views_data[, .(total_views = .N), by = customer_id]
+  
+  # Step 3: Calculate monthly average spending per customer
+  transactions_data[, spending := price * quantity]
+  avg_spending_per_customer <- transactions_data[, .(total_spending = sum(spending, na.rm = TRUE), 
+                                                     num_transactions = .N), by = customer_id]
+  avg_spending_per_customer[, avg_spending := total_spending / num_transactions]
+  
+  # Step 4: Merge total views and average spending data with customer demographics
+  customer_data <- merge(total_views_per_customer, customers_data, by = "customer_id", all.x = TRUE)
+  customer_data <- merge(customer_data, avg_spending_per_customer[, .(customer_id, avg_spending)], by = "customer_id", all.x = TRUE)
+  
+  # Step 5: Handle missing (NA) values in the merged dataset
+  customer_data[is.na(avg_spending), avg_spending := 0]   # Set avg_spending to 0 for customers with no purchases
+
+  # Step 6: Fit the linear regression model
+  model <- lm(avg_spending ~ total_views + age + gender + income + region, data = customer_data)
+  
+  # Step 7: Return the model summary
+  return(summary(model))
+}
+
+### Q10
+# Function to find customers who purchased the largest number of coats
+find_top_coat_customers <- function(transactions_data, products_data) {
+  
+  # Step 1: Identify coat products in the products data
+  coat_product_ids <- products_data[category == "coat", product_id]
+  
+  # Step 2: Join transactions with products to get the category information
+  transactions_with_products <- merge(transactions_data, products_data[, .(product_id, category)], by = "product_id", all.x = TRUE)
+  
+  # Step 3: Filter for coat purchases
+  coat_transactions <- transactions_with_products[category == "coat"]
+  
+  # Step 4: Group by customer and calculate the total number of coats purchased
+  coats_per_customer <- coat_transactions[, .(total_coats_purchased = sum(quantity)), by = customer_id]
+  
+  # Step 5: Find the maximum number of coats purchased by any customer
+  max_coats_purchased <- max(coats_per_customer$total_coats_purchased)
+  
+  # Step 6: Filter customers who purchased this maximum number of coats
+  top_coat_customers <- coats_per_customer[total_coats_purchased == max_coats_purchased]
+  
+  # Step 7: Sort the result by customer_id in increasing order
+  top_coat_customers <- top_coat_customers[order(customer_id)]
+  
+  # Step 8: Return the result
+  return(top_coat_customers)
+}
+
+```
+
+```{r load_data}
+views <- fread(input = params$views_file)
+transactions <- fread(input = params$transactions_file)
+products <- fread(input = params$products_file)
+customers <- fread(input = params$customers_file)
+year <- params$year
+month <- params$month
+```
+
+```{r explore_data, eval = FALSE}
+
+```
+
+
+```{r clean_data}
+views[, time := as.POSIXct(time, format = "%Y-%m-%dT%H:%M:%OS")]
+
+```
+
+## `r year` - `r month`
+
+## Specific Questions {.tabset}
+
+This part of the report will be directed to product managers throughout the client's company.  The idea is to give them the useful information they need to act on the specific questions they posed.  Plan your communication accordingly.
+
+For this report, make sure to use all of the data that was provided to you for the month.
+
+### Q1
+
+#### Question
+
+During the first 7 days of the month, what were the 10 most viewed products?  Show the results in a table with the product's identifier, category, and count of the number of views.
+
+#### Answer
+
+```{r part2_q1}
+first_7_top_10 <- get_top_10_views(views, products, year, month)
+colnames(first_7_top_10)[colnames(first_7_top_10) == "product_id"] <- "Product ID"
+colnames(first_7_top_10)[colnames(first_7_top_10) == "category"] <- "Category"
+colnames(first_7_top_10)[colnames(first_7_top_10) == "view_count"] <- "View Count"
+datatable(first_7_top_10)
+```
+
+### Q2
+
+#### Question
+
+During the whole month, what were the 10 most viewed products for each category?  Show the results in separate tables by category.  Include only the product's identifier and the count of the number of views.
+
+
+#### Answer {.tabset}
+
+```{r part2_q2_overall_calculations}
+# Get the top 10 most viewed products for each category
+top_10_by_category <- get_top_10_by_category(views, products)
+```
+
+##### Shirt
+
+```{r part2_q2_shirt}
+df_shirt = top_10_by_category$shirt
+colnames(df_shirt)[colnames(df_shirt) == "product_id"] <- "Product ID"
+colnames(df_shirt)[colnames(df_shirt) == "view_count"] <- "View Count"
+datatable(df_shirt)
+```
+
+##### Pants
+
+```{r part2_q2_pants}
+df_pants = top_10_by_category$pants
+colnames(df_pants)[colnames(df_pants) == "product_id"] <- "Product ID"
+colnames(df_pants)[colnames(df_pants) == "view_count"] <- "View Count"
+datatable(df_pants)
+```
+
+##### Coat
+
+```{r part2_q2_coat}
+df_coat = top_10_by_category$coat
+colnames(df_coat)[colnames(df_coat) == "product_id"] <- "Product ID"
+colnames(df_coat)[colnames(df_coat) == "view_count"] <- "View Count"
+datatable(df_coat)
+```
+
+##### Shoes
+
+```{r part2_q2_shoes}
+df_shoes = top_10_by_category$shoes
+colnames(df_shoes)[colnames(df_shoes) == "product_id"] <- "Product ID"
+colnames(df_shoes)[colnames(df_shoes) == "view_count"] <- "View Count"
+datatable(df_shoes)
+```
+
+##### Hat
+
+```{r part2_q2_hat}
+df_hat = top_10_by_category$hat
+colnames(df_hat)[colnames(df_hat) == "product_id"] <- "Product ID"
+colnames(df_hat)[colnames(df_hat) == "view_count"] <- "View Count"
+datatable(df_hat)
+```
+
+
+### Q3
+
+#### Question
+
+What was the total revenue for each category during the month?  Show the results in a single table sorted in decreasing order.
+
+#### Answer
+
+```{r part2_q3}
+revenue_by_category <- calculate_revenue_by_category(transactions, products)
+# Display the results
+revenue_by_category$total_revenue <- paste0("$", formatC(revenue_by_category$total_revenue, format = "f", big.mark = ",", digits = 2))
+colnames(revenue_by_category)[colnames(revenue_by_category) == "category"] <- "Category"
+colnames(revenue_by_category)[colnames(revenue_by_category) == "total_revenue"] <- "Total Revenue"
+datatable(revenue_by_category)
+```
+
+### Q4
+
+#### Question
+
+Among customers with at least one transaction, show the average, median, and standard deviation of monthly spending per customer.
+
+#### Answer
+
+```{r part2_q4}
+results <- calculate_spending_statistics(transactions)
+
+# Display the results
+# Create a data frame for the results
+results_df <- data.frame(
+  Metric = c("Average monthly spending per customer", 
+             "Median monthly spending per customer", 
+             "Standard deviation of monthly spending per customer"),
+  Value = c(paste0("$",results$average_spending), 
+            paste0("$",results$median_spending), 
+            results$sd_spending)
+)
+
+datatable(results_df, rownames = FALSE, options = list(pageLength = 3, dom = 't', ordering = FALSE))
+
+```
+
+### Q5
+
+#### Question
+
+What percent of the monthly revenue was attributed to each category of gender?  Show the amount of revenue and the percentage for each group.
+
+#### Answer
+
+```{r part2_q5}
+revenue_by_gender<- calculate_revenue_by_gender(transactions, customers)
+revenue_by_gender$total_revenue <- paste0("$", formatC(revenue_by_gender$total_revenue, format = "f", big.mark = ",", digits = 2))
+revenue_by_gender$percentage <- paste0(revenue_by_gender$percentage, "%")
+colnames(revenue_by_gender)[colnames(revenue_by_gender) == "gender"] <- "Gender"
+colnames(revenue_by_gender)[colnames(revenue_by_gender) == "total_revenue"] <- "Total Revenue"
+colnames(revenue_by_gender)[colnames(revenue_by_gender) == "percentage"] <- "Percentage"
+datatable(revenue_by_gender)
+```
+
+### Q6
+
+#### Question
+
+Using linear regression, what is the increase in monthly average spending associated with an extra ten thousand dollars of income?  Make sure your model also includes age, gender, and region as inputs to adjust for.
+
+#### Answer
+
+```{r part2_q6, echo=FALSE, results='asis'}
+# Step 1: Calculate monthly spending data for customers in January 2020
+customer_spending <- calculate_monthly_spending_per_customer(transactions, customers)
+
+# Step 2: Fit the linear regression model and check the summary
+regression_summary <- fit_spending_regression(customer_spending)
+coefficients <- coef(regression_summary)
+income_coef <- round(coefficients["scaled_income","Estimate"],2)
+
+# Display the model summary
+cat(sprintf("From the Estimate, increase in monthly average spending for every $10,000 increase in income is $ **%.2f**", income_coef))
+df_summary <- round(regression_summary$coefficients[, c("Estimate", "Pr(>|t|)")],2)
+colnames(df_summary)[colnames(df_summary) == "Pr(>|t|)"] <- "p-value"
+datatable(df_summary)
+cat(" Variables with p-value < 0.05 = statistically significant, it likely has a real effect on monthly average spending.")
+```
+
+
+### Q7
+
+#### Question
+
+Among customers who viewed at least 1 product, how many had at least one purchase during the month?  Show the total number of customers with a view, the total who made a purchase, and the percentage of customers with a view who made a purchase.
+
+#### Answer
+
+```{r part2_q7}
+# Call the function
+results <- calculate_views_and_purchases(views, transactions)
+
+# Display the results
+# Create a data frame for the results
+results_df <- data.frame(
+  Metric = c(
+    "Total customers with at least 1 view", 
+    "Total customers with at least 1 purchase", 
+    "Percentage of customers with a view who made a purchase"
+  ),
+  
+  Value = c(
+    formatC(results$total_customers_with_views, format = "d", big.mark = ","), 
+    formatC(results$total_customers_with_purchases, format = "d", big.mark = ","), 
+    paste0(results$percentage_with_purchase, "%")
+  )
+)
+
+datatable(results_df, rownames = FALSE, options = list(pageLength = 3, dom = 't', ordering = FALSE))
+```
+
+### Q8
+
+#### Question
+
+Now let's look at the viewing habits in different age groups, including 18-34, 35-49, 50-64, and 65+.  Within each group, what were the mean, median, and standard deviation for the number of unique products viewed per customer?
+
+#### Answer
+
+```{r part2_q8}
+# Call the function and store the results
+viewing_stats_by_age_group <- calculate_viewing_stats_by_age_group(views, customers)
+
+# Display the results
+colnames(viewing_stats_by_age_group)[colnames(viewing_stats_by_age_group) == "age_group"] <- "Age Group"
+colnames(viewing_stats_by_age_group)[colnames(viewing_stats_by_age_group) == "mean_unique_products"] <- "Mean Unique Products"
+colnames(viewing_stats_by_age_group)[colnames(viewing_stats_by_age_group) == "median_unique_products"] <- "Median Unique Products"
+colnames(viewing_stats_by_age_group)[colnames(viewing_stats_by_age_group) == "sd_unique_products"] <- "SD Unique Products"
+
+datatable(viewing_stats_by_age_group)
+
+```
+
+
+### Q9 
+
+#### Question
+
+Using linear regression, what is the increase in a customer's monthly average spending associated with an extra 10 total product views?  Make sure your model also includes age, gender, income, and region as inputs to adjust for.  Use only customers with at least 1 view during the month.  Use a spending value of 0 for customers without transactions during the month.  Make sure to round your answer to 2 decimal places.
+
+#### Answer
+
+```{r part2_q9, echo=FALSE, results='asis'}
+# Call the function and store the result
+spending_increase_per_10_views <- calculate_spending_increase_per_views(views, transactions, customers)
+
+# Interpret the coefficient for total views
+coefficients <- coef(spending_increase_per_10_views)
+views_coef <- coefficients["total_views","Estimate"]
+
+# Multiply by 10 to get the effect of 10 additional product views
+total_views_coef_10 <- round(views_coef * 10,2)
+
+# Display the model summary
+cat(sprintf("From the Estimate, a customer's monthly average spending associated with an extra 10 total product views is $ **%.2f**", total_views_coef_10))
+
+df_summary <- round(spending_increase_per_10_views$coefficients[, c("Estimate", "Pr(>|t|)")],3)
+colnames(df_summary)[colnames(df_summary) == "Pr(>|t|)"] <- "p-value"
+datatable(df_summary)
+cat(" Variables with p-value < 0.05 = statistically significant, it likely has a real effect on monthly average spending.")
+```
+
+### Q10
+
+#### Question
+
+Which customer(s) purchased the largest number of coats during the month?  In the event of a tie, include all of the users who reached this value, listed in increasing sorted order.  Show their identifiers and total volume of coats purchased during the month.
+
+#### Answer
+
+```{r part2_q10}
+# Call the function and store the result
+top_customers <- find_top_coat_customers(transactions, products)
+
+# Display the result
+
+colnames(top_customers)[colnames(top_customers) == "customer_id"] <- "Customer ID"
+colnames(top_customers)[colnames(top_customers) == "total_coats_purchased"] <- "Total Coats Purchased"
+
+datatable(top_customers)
+```
+

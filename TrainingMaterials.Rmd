@@ -1,0 +1,316 @@
+---
+title: "Retail Transactions:  Training Material"
+author: "Martin Ng"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r seed, include=FALSE}
+set.seed(41)
+```
+
+```{r libraries, include=FALSE}
+library(data.table)
+library(DT)
+```
+
+```{r constants}
+
+```
+
+```{r functions}
+
+```
+
+```{r load_data}
+transactions <- fread(input = "transactions -- January 2020.csv")  
+views <- fread(input = "views -- January 2020.csv")
+products <- fread(input = "products.csv")
+customers <- fread(input = 'customers.csv')
+```
+
+```{r explore_data, eval = FALSE}
+
+```
+
+
+```{r clean_data}
+
+```
+
+
+
+## Introduction {.tabset}
+
+This is the training material for generating an automated monthly report for the client's product managers, intended to highlight some of the most challenging parts of understanding and utilizing the data.
+
+The components to generate this report include:
+
+* A reporting template (.Rmd file) that is programmed to calculate the answers to the questions provided.
+* An automation script (.R file) that will allow the client to specify the parameters and generate new reports in future months.
+
+### Data Exploration {.tabset}
+
+Files needed for generating report include:
+
+* Monthly transactions e.g. "transactions -- January 2020.csv"
+* Monthly views e.g. "views -- January 2020.csv"
+* Product overview e.g. "products.csv"
+* Customer overview e.g. "customers.csv"
+
+#### Monthly transactions
+
+Transactions file contains all transactions of the company's products within the month.
+
+All columns of data are correctly formatted with no missing value, so no cleaning needed.
+
+Transactions data like price and quantity are mutiplied together to find cusomters total and average spending on products.
+```{r transactions data, echo = FALSE} 
+head(transactions,5)
+```
+
+#### Monthly views
+
+Views file contains all views of the company's products within the month.
+
+Time column is formatted as characters, requires cleaning.
+```{r views data, echo = FALSE}
+head(views,5)
+```
+
+#### Product overview
+
+Products file contains prices and categories of all the company's products. 
+
+All columns of data are correctly formatted with no missing value, so no cleaning needed.
+```{r products data, echo = FALSE}
+head(products,5)
+```
+
+#### Customer overview
+
+Customers file contains all of the company's customers data.
+
+All columns of data are correctly formatted with no missing value, so no cleaning needed.
+```{r customers data, echo = FALSE}
+head(customers,5)
+```
+
+### Reporting Template {.tabset}
+
+The reporting template contains 10 questions where answers will be generated when the automated R script is run. 
+
+Functions are created and called to answer each question, they are stored in the "functions" section. 
+
+Areas to be aware of:
+
+
+#### Loading Data
+
+There is a list of parameters in the automated R script that is rendered to the reporting template.
+
+1. Specify NULL for paramters at the top of the template, this ensures that parameters have a valid default value.
+
+2. Load the data as below:
+```{r, eval=FALSE}
+views <- fread(input = params$views_file)
+transactions <- fread(input = params$transactions_file)
+products <- fread(input = params$products_file)
+customers <- fread(input = params$customers_file)
+year <- params$year
+month <- params$month
+```
+
+#### Cleaning Data
+
+As mentioned in Data Exploration, the time column in the views file needs to be corrected to the right format. 
+```{r, eval=FALSE}
+views[, time := as.POSIXct(time, format = "%Y-%m-%dT%H:%M:%OS")]
+```
+
+
+#### Q1
+
+Question asks for views data for the **first 7 days** of the month, a date range should be constructed to identify the data needed.
+```{r, eval=FALSE}
+  start_date <- as.POSIXct(paste0(year, "-", sprintf("%02d", month), "-01 00:00:00"))
+  end_date <- as.POSIXct(paste0(year, "-", sprintf("%02d", month), "-08 00:00:00"))
+  
+  views_first7days <- views_data[time >= start_date & time < end_date]
+```
+
+#### Q2
+
+The function returns a list of data tables since the question asks for results in separate categories. Therefore call the function and access the list of data tables with "$" operator and names of category 
+
+e.g. top_10_by_category$shirt
+
+```{r, eval=FALSE}
+### Q2
+# Function to get the top 10 most viewed products for each category
+get_top_10_by_category <- function(views_data, products_data) {
+
+  # Step 1: Count the number of views per product_id
+  view_counts <- views_data[, .(view_count = .N), by = product_id]
+  
+  # Step 2: Join with products data to include category
+  view_counts_with_category <- merge(view_counts, products_data, by = "product_id", all.x = TRUE)
+  
+  # Step 3: For each category, find the top 10 products
+  categories <- unique(view_counts_with_category$category)
+  results <- list()
+  
+  for (cat in categories) {
+    top_10 <- view_counts_with_category[category == cat][order(-view_count)][1:10, .(product_id, view_count)]
+    results[[cat]] <- top_10
+  }
+  return(results)
+}
+
+# Get the top 10 most viewed products for each category
+top_10_by_category <- get_top_10_by_category(views, products)
+
+# Access specific category with $ operator and name of category
+df_shirt = top_10_by_category$shirt
+```
+
+#### Q6
+
+The question asks for the increase in monthly average spending associated with **an extra ten thousand dollars of income**, so income has to be scaled (divided by 10,000) before fitting into the linear regression model.
+
+```{r, eval=FALSE}
+# Function for fitting the linear regression model
+fit_spending_regression <- function(customer_spending_data) {
+  
+  # Scale income by 10,000 for easier interpretation
+  customer_spending_data[, scaled_income := income / 10000]
+  
+  # Fit the linear regression model
+  model <- lm(total_spending ~ scaled_income + age + gender + region, data = customer_spending_data)
+  
+  # Return the model summary
+  return(summary(model))
+}
+```
+
+#### Q9
+
+The question asks for the increase in a customer’s monthly average spending (mas) associated with **an extra 10 total product views**, so the estimate result has to be multiplied by 10 to get the increase in mas.
+
+```{r, eval=FALSE}
+# Call the function and store the result
+spending_increase_per_10_views <- calculate_spending_increase_per_views(views, transactions, customers)
+
+# Interpret the coefficient for total views
+total_views_coef <- coef(model)["total_views"]
+
+# Multiply by 10 to get the effect of 10 additional product views
+total_views_coef_10 <- round(total_views_coef * 10,2)
+```
+
+#### Presentation Details
+
+1. Column names are in lower case and contain underscores. Convert them to upper case and remove underscores for better viewing.
+```{r, eval=FALSE}
+### Question 1
+colnames(first_7_top_10)[colnames(first_7_top_10) == "product_id"] <- "Product ID"
+```
+
+2. Add comma seperators to big numbers (>1,000) and add signs like "$" and "%".
+```{r, eval=FALSE}
+### Question 3
+# Call function to get revenue by category
+revenue_by_category <- calculate_revenue_by_category(transactions, products)
+# Display the results
+revenue_by_category$total_revenue <- paste0("$", formatC(revenue_by_category$total_revenue, format = "f", big.mark = ",", digits = 2))
+```
+
+3. For questions about linear regression, show only the coefficients summary but not the whole regression summary since it is hard for people with no statistical background to understand. 
+```{r, eval=FALSE}
+### Question 6
+# Display the model summary
+cat(sprintf("From the Estimate, increase in monthly average spending for every $10,000 increase in income is $ **%.2f**", income_coef))
+df_summary <- round(regression_summary$coefficients[, c("Estimate", "Pr(>|t|)")],2)
+colnames(df_summary)[colnames(df_summary) == "Pr(>|t|)"] <- "p-value"
+datatable(df_summary)
+```
+
+
+### Automation Script {.tabset}
+
+The automation script is split into two sections:
+
+* Setting Working Directory and Defining Parameters -- Client edit needed
+* Code for Rendering -- **Do not edit**
+
+#### Setting Working Directory and Parameters
+
+1. Reminder to store other files needed in the same working directory and set the automated scripts working directory to Source File Location.
+2. Parameters list to be edited by client:  Update file names and date.
+3. Reminder to run all code (Highlight all and run)
+
+```{r, eval=FALSE}
+# Step 1: Make sure all files are in the same working directory, then set this R script to the same directory:
+# Session --> Set Working Directory --> To Source File Location
+
+# Step 2: Define parameters for the report
+# Update these file names and parameters for each month (and year)
+params_list <- list(
+  views_file = "views -- January 2020.csv",  # Views file
+  transactions_file = "transactions -- January 2020.csv", # Transactions file
+  products_file = "products.csv", # Products file
+  customers_file = "customers.csv", # Customers file
+  month = 1, # Report month in numeric
+  year = 2020 # Report year 
+)
+
+# Step 3: Highlight everything (including code below) on this script and press Run. Give it a minute.
+# The report "Report_<year>_<month>.html" will be stored in a new folder within the same working directory.
+```
+
+
+#### Code for Rendering
+
+1. Load rmarkdown library
+2. Create output directory and file using report year and month
+3. Specify the template
+4. Render the report and pass the parameters list to the Rmd file 
+5. Notify user of report generation
+
+```{r, eval=FALSE}
+### Section 2: DO NOT EDIT CODE BELOW
+
+# Load necessary libraries
+library(rmarkdown)
+
+# Create output directory if not exists
+output_dir <- paste0("Monthly_Reports/", params_list$year, "_", sprintf("%02d", params_list$month))
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+output_file <- paste0(output_dir, "/Report_", params_list$year, "_", sprintf("%02d", params_list$month), ".html")
+
+# Specify the template path
+rmarkdown_template <- "Template -- Monthly Report.Rmd"  
+
+# Render the report, passing the params list to the Rmd file
+render(
+  input = rmarkdown_template,                     # RMarkdown template
+  output_file = output_file,                      # Output HTML file
+  params = params_list,                           # Pass params
+  envir = new.env(parent = globalenv())           # Use new environment for params
+)
+
+# Notify user of report generation
+cat("Report for", params_list$report_date, "has been generated at:", output_file, "\n")
+```
+
+
+
+
+
+
+
