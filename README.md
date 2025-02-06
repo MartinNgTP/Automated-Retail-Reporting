@@ -47,8 +47,7 @@ install.packages(c("data.table", "ggplot2", "rmarkdown", "dplyr"))
 Check out the reports [here](https://martinngtp.github.io/Automated-Retail-Reporting/).
 
 
-
-
 ---
-This README provides a structured guide for users and contributors, ensuring ease of setup and scalability. 🚀
+
+Made by Martin Ng
 
